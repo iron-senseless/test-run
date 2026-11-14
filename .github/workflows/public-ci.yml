@@ -1,0 +1,43 @@
+name: Public isolated CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/public-ci.yml'
+      - 'jobs/**'
+      - 'tests/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/public-ci.yml'
+      - 'jobs/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-python-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out public repository only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Syntax-check and run public synthetic tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q jobs tests
+          python -m unittest discover -s tests -p 'test_*.py' -v
