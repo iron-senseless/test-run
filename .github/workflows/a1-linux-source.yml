@@ -1,0 +1,29 @@
+name: Public A1 pinned Linux source witness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'jobs/port_cpu_r1_a1_*'
+      - 'tests/test_port_cpu_r1_a1_model.py'
+      - '.github/workflows/a1-linux-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-upstream-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out this public sandbox only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify six SHA-pinned public Linux source blobs
+        run: python jobs/port_cpu_r1_a1_source_gate.py
