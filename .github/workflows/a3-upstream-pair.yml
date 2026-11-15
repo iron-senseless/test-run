@@ -1,0 +1,37 @@
+name: Public A3 exact Linux 6.1 paired source build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/a3-upstream-pair.yml'
+      - 'jobs/a3_upstream_pair.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a3-pair-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upstream-pair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install dependencies for exact upstream build
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bc bison flex libssl-dev libelf-dev build-essential git ca-certificates
+      - name: Build original and fixed public Linux kernels
+        run: bash jobs/a3_upstream_pair.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: a3-public-x86_64-upstream-kernel-pair
+          path: ${{ runner.temp }}/a3-output/
+          retention-days: 7
+          if-no-files-found: error
