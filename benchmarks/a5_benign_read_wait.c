@@ -143,6 +143,7 @@ static int sample(int f,int id,size_t pages,int control,int *positive) {
     if(put(TR "tracing_on","1"))return -1;
     atomic_store(&wg,1);
     char buf[16384]={0};size_t used=0;
+    int total_lines=0,debug_lines=0;
     long long end=ns()+4000000000LL;
     while(ns()<end && (x.sd<0||x.ra<0||x.wr<0||!atomic_load(&rdone))){
         struct pollfd pf={.fd=f,.events=POLLIN};
@@ -151,7 +152,17 @@ static int sample(int f,int id,size_t pages,int control,int *positive) {
         if(z<=0)continue;
         used+=(size_t)z;buf[used]=0;
         char *p=buf,*q;
-        while((q=strchr(p,'\n'))){*q=0;parse(p,&x,control);p=q+1;}
+        while((q=strchr(p,'\n'))){
+            *q=0;
+            total_lines++;
+            if(id==0 && debug_lines<16 && strstr(p,"mmap_lock")) {
+                printf(OUT "TRACE_DEBUG tid=%d writer=%d reader=%d text=%.*s\n",
+                       tid(p),atomic_load(&wtid),atomic_load(&rtid),225,p);
+                debug_lines++;
+            }
+            parse(p,&x,control);
+            p=q+1;
+        }
         used=strlen(p);memmove(buf,p,used);
         if(used>sizeof(buf)/2)used=0;
     }
@@ -173,6 +184,7 @@ static int sample(int f,int id,size_t pages,int control,int *positive) {
            x.rs>0&&x.ra>0?(x.ra-x.rs)/1000.0:-1.,
            ordered,x.send_rc,atomic_load(&handler_ns)>0,
            atomic_load(&werr),atomic_load(&rerr));
+    printf(OUT "TRACE_LINES id=%d total=%d debug=%d\n",id,total_lines,debug_lines);
     munmap(range,range_len);
     if(atomic_load(&werr)||atomic_load(&rerr))return -1;
     if(x.wa<0||x.wr<0||x.rs<0||x.ra<0)return -1;

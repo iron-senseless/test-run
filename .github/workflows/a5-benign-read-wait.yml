@@ -60,6 +60,7 @@ jobs:
           echo "QEMU_EXIT=$rc"
           grep 'A5_BENIGN' "$RUNNER_TEMP/a5-serial.log" | tail -n 12 || true
           grep -q 'A5_BENIGN RESULT total=6' "$RUNNER_TEMP/a5-serial.log"
+          grep -Eq 'A5_BENIGN RESULT total=6 positive=[0-9]+ infra_failures=0 benign_only=1' "$RUNNER_TEMP/a5-serial.log"
           test "$rc" -eq 0
       - name: Upload bounded public-only log
         if: always()
