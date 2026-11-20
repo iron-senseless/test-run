@@ -1,0 +1,71 @@
+name: A5 public benign same-mm reader writer signal timeline
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/a5-benign-read-wait.yml'
+      - 'benchmarks/a5_benign_read_wait.c'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: a5-benign-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  benign-reader-writer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile public benign source and selftest
+        run: |
+          set -euo pipefail
+          cc -O2 -Wall -Wextra -Werror -static -pthread -o "$RUNNER_TEMP/init" benchmarks/a5_benign_read_wait.c
+          "$RUNNER_TEMP/init" --selftest
+      - name: Verify existing exact public upstream kernel
+        env:
+          GH_TOKEN: '${{ github.token }}'
+        run: |
+          set -euo pipefail
+          gh api repos/iron-senseless/test-run/actions/artifacts/14141817168 --jq '{name,digest,expired,run:.workflow_run.id}' > "$RUNNER_TEMP/manifest.json"
+          python3 - "$RUNNER_TEMP/manifest.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          assert x=={"name":"a3-public-x86_64-upstream-kernel-pair","digest":"sha256:a989767abcca82aa3bc1b40b0053f77cc8be3c68082b468c61a8e4c486d67724","expired":False,"run":43664052722},x
+          PY
+          mkdir "$RUNNER_TEMP/kernels"
+          gh run download 43664052722 --repo iron-senseless/test-run --name a3-public-x86_64-upstream-kernel-pair --dir "$RUNNER_TEMP/kernels"
+          (cd "$RUNNER_TEMP/kernels" && sha256sum -c SHA256SUMS)
+          grep -Fx OLD_COMMIT=e44cee1bf51e606f3e70a213eb5a1abb3fa56a81 "$RUNNER_TEMP/kernels/provenance.txt"
+          test -s "$RUNNER_TEMP/kernels/old.bzImage"
+      - name: Run benign mmap and SIGUSR1 in diskless QEMU TCG
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 cpio
+          mkdir -p "$RUNNER_TEMP/root/dev"
+          cp "$RUNNER_TEMP/init" "$RUNNER_TEMP/root/init"
+          sudo mknod -m 600 "$RUNNER_TEMP/root/dev/console" c 5 1
+          (cd "$RUNNER_TEMP/root" && find . -print0 | cpio --null -o -H newc --owner=0:0 2>/dev/null) | gzip -9 > "$RUNNER_TEMP/initramfs.gz"
+          set +e
+          timeout --signal=TERM --kill-after=3s 115s \
+            qemu-system-x86_64 -accel tcg -machine pc -m 1024 -smp 2 -nographic -serial stdio -monitor none \
+            -no-reboot -nic none -nodefaults -kernel "$RUNNER_TEMP/kernels/old.bzImage" \
+            -initrd "$RUNNER_TEMP/initramfs.gz" -append "console=ttyS0,115200 loglevel=4 panic=-1" \
+            > "$RUNNER_TEMP/a5-serial.log" 2>&1
+          rc=$?
+          set -e
+          echo "QEMU_EXIT=$rc"
+          grep 'A5_BENIGN' "$RUNNER_TEMP/a5-serial.log" | tail -n 12 || true
+          grep -q 'A5_BENIGN RESULT total=6' "$RUNNER_TEMP/a5-serial.log"
+          test "$rc" -eq 0
+      - name: Upload bounded public-only log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a5-upstream-benign-readwait-${{ github.run_id }}
+          path: '${{ runner.temp }}/a5-serial.log'
+          retention-days: 7
+          if-no-files-found: warn
