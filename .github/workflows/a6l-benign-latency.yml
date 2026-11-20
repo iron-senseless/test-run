@@ -1,0 +1,103 @@
+name: A6-L independent benign trace-delivery latency (public)
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/a6l-benign-latency.yml'
+      - 'benchmarks/a6l_benign_latency.c'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: a6l-upstream-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  upstream-benign-latency:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile reviewed public standalone source and run parser selftest
+        run: |
+          set -euo pipefail
+          cc -O2 -Wall -Wextra -Werror -static -pthread \
+            -o "$RUNNER_TEMP/init" benchmarks/a6l_benign_latency.c
+          "$RUNNER_TEMP/init" --selftest
+          test "$(git hash-object benchmarks/a6l_benign_latency.c)" = '45ce02b00fb4ede9fae699559b88986b338975c5'
+      - name: Verify previously published exact upstream Linux 6.1 kernel
+        env:
+          GH_TOKEN: '${{ github.token }}'
+        run: |
+          set -euo pipefail
+          gh api repos/iron-senseless/test-run/actions/artifacts/14141817168 \
+            --jq '{name,digest,expired,run:.workflow_run.id}' > "$RUNNER_TEMP/manifest.json"
+          python3 - "$RUNNER_TEMP/manifest.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          assert x=={"name":"a3-public-x86_64-upstream-kernel-pair",
+                    "digest":"sha256:a989767abcca82aa3bc1b40b0053f77cc8be3c68082b468c61a8e4c486d67724",
+                    "expired":False,"run":43664052722},x
+          PY
+          mkdir -p "$RUNNER_TEMP/kernels"
+          gh run download 43664052722 --repo iron-senseless/test-run \
+            --name a3-public-x86_64-upstream-kernel-pair --dir "$RUNNER_TEMP/kernels"
+          (cd "$RUNNER_TEMP/kernels" && sha256sum -c SHA256SUMS)
+          grep -Fx OLD_COMMIT=e44cee1bf51e606f3e70a213eb5a1abb3fa56a81 \
+            "$RUNNER_TEMP/kernels/provenance.txt"
+          test -s "$RUNNER_TEMP/kernels/old.bzImage"
+      - name: Execute one bounded diskless non-networked QEMU TCG benign comparison
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 cpio
+          mkdir -p "$RUNNER_TEMP/root/dev"
+          cp "$RUNNER_TEMP/init" "$RUNNER_TEMP/root/init"
+          sudo mknod -m 600 "$RUNNER_TEMP/root/dev/console" c 5 1
+          (cd "$RUNNER_TEMP/root"; find . -print0 | cpio --null -o -H newc --owner=0:0 2>/dev/null) \
+            | gzip -9 > "$RUNNER_TEMP/initramfs.gz"
+          set +e
+          timeout --signal=TERM --kill-after=3s 105s \
+            qemu-system-x86_64 -accel tcg -machine pc -m 1024 -smp 2 \
+              -nographic -serial stdio -monitor none -no-reboot -nic none -nodefaults \
+              -kernel "$RUNNER_TEMP/kernels/old.bzImage" \
+              -initrd "$RUNNER_TEMP/initramfs.gz" \
+              -append "console=ttyS0,115200 loglevel=4 panic=-1 no_hash_pointers" \
+            > "$RUNNER_TEMP/a6l-serial.log" 2>&1
+          rc=$?
+          set -e
+          echo "A6L_QEMU_EXIT=$rc"
+          grep 'A6L_BENIGN' "$RUNNER_TEMP/a6l-serial.log" | grep -E 'START|SAMPLE|RESULT|TRACE_SETUP' | tail -n 15 || true
+          python3 - "$RUNNER_TEMP/a6l-serial.log" "$RUNNER_TEMP/a6l-summary.json" <<'PY'
+          import json,re,sys
+          s=open(sys.argv[1],errors="replace").read()
+          lines=re.findall(r"A6L_BENIGN SAMPLE mode=(\d+) rep=(\d+) ([^\n]+)",s)
+          assert len(lines)==6,("Expected six bounded measurements",len(lines))
+          assert {(int(a),int(b)) for a,b,_ in lines}=={(m,r) for m in range(3) for r in range(2)}
+          result=re.search(r"A6L_BENIGN RESULT samples=6 incomplete=(\d+) benign_only=1",s)
+          assert result,("Missing final result",s[-400:])
+          assert "A6L_BENIGN START NO_PROCESS_EXEC NO_CPU_TIMERS NO_TERMINATING_SIGNALS" in s
+          assert "Kernel panic" not in s
+          rows=[]
+          for mode,rep,body in lines:
+              v={k:float(n) if '.' in n else int(n) for k,n in
+                 re.findall(r"([a-z_]+)=(-?\d+(?:\.\d+)?)",body)}
+              rows.append({"mode":int(mode),"rep":int(rep),**v})
+          out={"kernel":"UPSTREAM_6.1_OLD_ONLY","host_guest":True,
+               "watch":"NOT_USED","not_exploit":True,
+               "incomplete":int(result.group(1)),"rows":rows}
+          open(sys.argv[2],"w").write(json.dumps(out,indent=2,sort_keys=True)+"\n")
+          print("A6L_BOUNDED_SAMPLES=6 INCOMPLETE=",out["incomplete"])
+          PY
+          test "$rc" -eq 0
+      - name: Archive bounded public trace timing only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a6l-upstream-benign-latency-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/a6l-serial.log
+            ${{ runner.temp }}/a6l-summary.json
+          retention-days: 7
+          if-no-files-found: warn
