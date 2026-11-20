@@ -1,0 +1,76 @@
+name: A4 public benign mmap lock and signal timing
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/a4-benign-timing.yml'
+      - 'benchmarks/a4_benign_mmap_timing.c'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: a4-public-benign-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  benign-timing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile and selftest public benign fixture
+        run: |
+          set -euo pipefail
+          cc -O2 -Wall -Wextra -Werror -static -pthread -o "$RUNNER_TEMP/init" benchmarks/a4_benign_mmap_timing.c
+          "$RUNNER_TEMP/init" --selftest
+      - name: Verify and retrieve exact existing upstream-only kernel artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/iron-senseless/test-run/actions/artifacts/14141817168 \
+            --jq '{name,digest,expired,run:.workflow_run.id}' > "$RUNNER_TEMP/manifest.json"
+          python3 - "$RUNNER_TEMP/manifest.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          assert x=={"name":"a3-public-x86_64-upstream-kernel-pair","digest":"sha256:a989767abcca82aa3bc1b40b0053f77cc8be3c68082b468c61a8e4c486d67724","expired":False,"run":43664052722},x
+          PY
+          mkdir "$RUNNER_TEMP/kernels"
+          gh run download 43664052722 --repo iron-senseless/test-run \
+            --name a3-public-x86_64-upstream-kernel-pair --dir "$RUNNER_TEMP/kernels"
+          (cd "$RUNNER_TEMP/kernels" && sha256sum -c SHA256SUMS)
+          grep -Fx OLD_COMMIT=e44cee1bf51e606f3e70a213eb5a1abb3fa56a81 "$RUNNER_TEMP/kernels/provenance.txt"
+          test -s "$RUNNER_TEMP/kernels/old.bzImage"
+      - name: Run only normal mmap and harmless SIGUSR1 in diskless QEMU
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 cpio
+          mkdir -p "$RUNNER_TEMP/root/dev"
+          cp "$RUNNER_TEMP/init" "$RUNNER_TEMP/root/init"
+          sudo mknod -m 600 "$RUNNER_TEMP/root/dev/console" c 5 1
+          (cd "$RUNNER_TEMP/root" && find . -print0 | cpio --null -o -H newc --owner=0:0 2>/dev/null) \
+             | gzip -9 > "$RUNNER_TEMP/initramfs.gz"
+          set +e
+          timeout --signal=TERM --kill-after=3s 90s \
+             qemu-system-x86_64 -accel tcg -machine pc -m 1024 -smp 2 \
+             -nographic -serial stdio -monitor none -no-reboot -nic none -nodefaults \
+             -kernel "$RUNNER_TEMP/kernels/old.bzImage" -initrd "$RUNNER_TEMP/initramfs.gz" \
+             -append "console=ttyS0,115200 loglevel=4 panic=-1" > "$RUNNER_TEMP/a4-serial.log" 2>&1
+          rc=$?
+          set -e
+          echo "QEMU_EXIT=$rc"
+          grep 'A4_BENIGN' "$RUNNER_TEMP/a4-serial.log" | tail -n 12 || true
+          grep -q 'A4_BENIGN RESULT samples=6 failures=0' "$RUNNER_TEMP/a4-serial.log"
+          test "$rc" -eq 0
+          echo 'A4_PUBLIC_BENIGN_GUEST=PASS' >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish bounded public-only timing numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a4-upstream-benign-timing-${{ github.run_id }}
+          path: ${{ runner.temp }}/a4-serial.log
+          retention-days: 7
+          if-no-files-found: warn
