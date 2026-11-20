@@ -25,7 +25,7 @@ jobs:
           cc -O2 -Wall -Wextra -Werror -static -pthread \
             -o "$RUNNER_TEMP/init" benchmarks/a6l_benign_latency.c
           "$RUNNER_TEMP/init" --selftest
-          test "$(git hash-object benchmarks/a6l_benign_latency.c)" = '45ce02b00fb4ede9fae699559b88986b338975c5'
+          test "$(git hash-object benchmarks/a6l_benign_latency.c)" = '83efdfb17e8ac4630a9543371f3457c0018c5584'
       - name: Verify previously published exact upstream Linux 6.1 kernel
         env:
           GH_TOKEN: '${{ github.token }}'
@@ -84,6 +84,9 @@ jobs:
               v={k:float(n) if '.' in n else int(n) for k,n in
                  re.findall(r"([a-z_]+)=(-?\d+(?:\.\d+)?)",body)}
               rows.append({"mode":int(mode),"rep":int(rep),**v})
+          for v in rows:
+              if v["mode"]>0: assert v.get("kp_seen")==1,("Missing safe kprobe",v)
+          assert all(v.get("complete")==1 for v in rows),("Missing timing events",rows)
           out={"kernel":"UPSTREAM_6.1_OLD_ONLY","host_guest":True,
                "watch":"NOT_USED","not_exploit":True,
                "incomplete":int(result.group(1)),"rows":rows}
