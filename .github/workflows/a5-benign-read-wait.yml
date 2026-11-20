@@ -53,7 +53,7 @@ jobs:
           timeout --signal=TERM --kill-after=3s 115s \
             qemu-system-x86_64 -accel tcg -machine pc -m 1024 -smp 2 -nographic -serial stdio -monitor none \
             -no-reboot -nic none -nodefaults -kernel "$RUNNER_TEMP/kernels/old.bzImage" \
-            -initrd "$RUNNER_TEMP/initramfs.gz" -append "console=ttyS0,115200 loglevel=4 panic=-1" \
+            -initrd "$RUNNER_TEMP/initramfs.gz" -append "console=ttyS0,115200 loglevel=4 panic=-1 no_hash_pointers" \
             > "$RUNNER_TEMP/a5-serial.log" 2>&1
           rc=$?
           set -e

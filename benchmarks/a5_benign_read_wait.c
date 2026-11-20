@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
@@ -44,11 +45,14 @@ static long long ts(const char *s,const char *name) {
     return end==c&&v>0?(long long)(v*1e9+0.5):-1;
 }
 static int tid(const char *s) {
-    const char *b=strstr(s," [");if(!b)return -1;
-    const char *a=b;
-    while(a>s && a[-1]!='-')a--;
-    char *end;long n=strtol(a,&end,10);
-    return a>s&&end==b&&n>0&&n<100000000?(int)n:-1;
+    const char *b=strchr(s,'[');if(!b)return -1;
+    const char *end=b,*a;char *parsed;
+    while(end>s && isspace((unsigned char)end[-1]))end--;
+    a=end;
+    while(a>s && isdigit((unsigned char)a[-1]))a--;
+    if(a==end || a<=s || a[-1]!='-')return -1;
+    long n=strtol(a,&parsed,10);
+    return parsed==end&&n>0&&n<100000000?(int)n:-1;
 }
 static int nfield(const char *s,const char *key) {
     const char *p=strstr(s,key);return p?atoi(p+strlen(key)):-1;
@@ -169,7 +173,7 @@ static int sample(int f,int id,size_t pages,int control,int *positive) {
     atomic_store(&rg,1);
     pthread_join(w,NULL);pthread_join(r,NULL);
     put(TR "tracing_on","0");
-    int same=x.wm[0]&&x.rm[0]&&!strcmp(x.wm,x.rm);
+    int same=x.wm[0]&&x.rm[0]&&!strstr(x.wm,"ptrval")&&!strstr(x.rm,"ptrval")&&!strcmp(x.wm,x.rm);
     int ordered=x.wa>0&&x.rs>x.wa&&x.sg>x.rs&&x.wr>x.sg&&
                 x.ra>x.wr&&x.sd>=x.ra&&same;
     if(!control&&ordered&&x.sent&&x.send_rc==0&&
@@ -192,7 +196,7 @@ static int sample(int f,int id,size_t pages,int control,int *positive) {
 }
 int main(int argc,char **argv){
     if(argc==2&&!strcmp(argv[1],"--selftest")){
-        const char *s="p-123 [001] .... 123.456789: mmap_lock_start_locking: mm=abcdef write=false";
+        const char *s="init-123      [001] .... 123.456789: mmap_lock_start_locking: mm=abcdef write=false";
         char m[80];
         if(tid(s)!=123||ts(s,"mmap_lock_start_locking:")!=123456789000LL||
            mmfield(s,m)||strcmp(m,"abcdef"))return 12;
